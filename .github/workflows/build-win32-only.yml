@@ -1,0 +1,85 @@
+name: Build Thalixte ReShade 32-bit Only
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    # 关键修正：使用 "Release|32-bit" 而不是 "Release|Win32"
+    # 并且用引号包裹目标项目名（因为包含空格）
+    - name: Build ReShade 32-bit
+      shell: cmd  # 使用 cmd 避免 PowerShell 解析问题
+      run: |
+        msbuild ReShade.sln ^
+          /p:Configuration=Release ^
+          /p:Platform="32-bit" ^
+          /t:"ReShade";"ReShade FX";"gl3w";"ImGui";"MinHook";"stb";"FXC";"Injector" ^
+          /m ^
+          /verbosity:minimal
+
+    - name: Collect 32-bit DLLs
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "output_32bit"
+        
+        # 搜索可能的输出路径（根据 sln，可能是 bin/32-bit/Release/ 或类似路径）
+        $searchPaths = @(
+          "bin\32-bit\Release\ReShade32.dll",
+          "bin\Win32\Release\ReShade32.dll",
+          "bin\Release\ReShade32.dll",
+          "bin\32-bit\ReShade32.dll"
+        )
+        
+        $found = $false
+        foreach ($path in $searchPaths) {
+          if (Test-Path $path) {
+            Copy-Item $path "output_32bit\" -Force
+            Write-Host "✓ Found: $path"
+            $found = $true
+          }
+        }
+        
+        # 如果没找到，显示 bin 目录结构帮助调试
+        if (-not $found) {
+          Write-Host "❌ DLL not found in expected paths. Actual structure:"
+          Get-ChildItem -Path "bin" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+          exit 1
+        }
+
+    - name: Upload 32-bit DLL
+      uses: actions/upload-artifact@v4
+      with:
+        name: Thalixte-ReShade-32bit
+        path: output_32bit/
+        retention-days: 30
+
+    - name: Release
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: win32-build-${{ github.run_number }}
+        name: Thalixte ReShade 32-bit Build ${{ github.run_number }}
+        files: output_32bit/*
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
