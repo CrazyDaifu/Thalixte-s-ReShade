@@ -29,25 +29,52 @@ jobs:
         echo import sys > deps\gl3w\gl3w_gen.py
         echo sys.exit(0) >> deps\gl3w\gl3w_gen.py
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Remove Windows SDK restriction and disable D3D12
+    - name: Fix vcxproj files (Remove SDK restriction and D3D12)
       shell: powershell
       run: |
-        # 删除 SDK 版本限制，使用系统默认
         Get-ChildItem -Recurse -Filter "*.vcxproj" | ForEach-Object {
-          $content = Get-Content $_.FullName -Raw
-          $original = $content
-          $content = $content -replace '<WindowsTargetPlatformVersion>.*?</WindowsTargetPlatformVersion>\s*', ''
-          # 禁用 D3D12 支持（避免 SDK 兼容性问题）
-          $content = $content -replace '<ClCompile Include="source\\d3d12\\[^"]*" />', ''
-          $content = $content -replace '<ClInclude Include="source\\d3d12\\[^"]*" />', ''
-          if ($content -ne $original) {
-            Set-Content $_.FullName $content -NoNewline
-            Write-Host "Fixed: $($_.Name)"
+          [xml]$xml = Get-Content $_.FullName
+          $modified = $false
+          
+          # 1. 删除 WindowsTargetPlatformVersion 节点
+          $sdkNodes = $xml.SelectNodes("//WindowsTargetPlatformVersion")
+          foreach ($node in $sdkNodes) {
+            $node.ParentNode.RemoveChild($node)
+            $modified = $true
+          }
+          
+          # 2. 删除所有 D3D12 相关的 ClCompile 和 ClInclude
+          $items = $xml.SelectNodes("//ClCompile[contains(@Include, 'd3d12')] | //ClInclude[contains(@Include, 'd3d12')]")
+          foreach ($item in $items) {
+            $item.ParentNode.RemoveChild($item)
+            $modified = $true
+            Write-Host "Removed D3D12 item: $($item.Include) from $($_.Name)"
+          }
+          
+          # 3. 添加 D3D12 禁用宏定义
+          $groups = $xml.SelectNodes("//ItemDefinitionGroup[not(@Condition) or contains(@Condition, 'Release') or contains(@Condition, '32-bit')]")
+          foreach ($group in $groups) {
+            if ($group.ClCompile -eq $null) {
+              $clCompile = $xml.CreateElement("ClCompile")
+              $group.AppendChild($clCompile)
+            }
+            $preprocessor = $group.ClCompile.PreprocessorDefinitions
+            if ($preprocessor -eq $null) {
+              $preprocessor = $xml.CreateElement("PreprocessorDefinitions")
+              $group.ClCompile.AppendChild($preprocessor)
+            }
+            $preprocessor.InnerText = "RESHADE_NO_D3D12;RESHADE_NO_D3D12ON7;%(PreprocessorDefinitions)"
+            $modified = $true
+          }
+          
+          if ($modified) {
+            $xml.Save($_.FullName)
+            Write-Host "Updated: $($_.Name)"
           }
         }
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
 
     - name: Build ReShade 32-bit
       shell: cmd
@@ -56,6 +83,7 @@ jobs:
           /p:Configuration=Release ^
           /p:Platform="32-bit" ^
           /p:PlatformToolset=v143 ^
+          /p:PreprocessorDefinitions=RESHADE_NO_D3D12 ^
           /t:"ReShade";"ReShade FX";"gl3w";"ImGui";"MinHook";"stb";"FXC";"Injector" ^
           /m
 
