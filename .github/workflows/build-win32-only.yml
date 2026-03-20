@@ -18,16 +18,17 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Fix Windows SDK version in all projects
+    - name: Fix Windows SDK version to auto-select
       shell: powershell
       run: |
         Get-ChildItem -Recurse -Filter "*.vcxproj" | ForEach-Object {
           $content = Get-Content $_.FullName -Raw
           $original = $content
-          $content = $content -replace '10\.0\.17763\.0', '10.0.20348.0'
+          # 替换为 "10.0" 表示使用最新可用版本
+          $content = $content -replace '<WindowsTargetPlatformVersion>10\.0\.\d+\.\d+</WindowsTargetPlatformVersion>', '<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>'
           if ($content -ne $original) {
             Set-Content $_.FullName $content -NoNewline
-            Write-Host "Fixed: $($_.FullName)"
+            Write-Host "Fixed: $($_.Name)"
           }
         }
 
