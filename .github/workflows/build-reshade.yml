@@ -1,105 +1,90 @@
 name: Build Thalixte ReShade 4.9.1 Full DLLs
 on:
-  workflow_dispatch: # 推荐手动触发，避免无效编译
+  workflow_dispatch: # 手动触发（推荐，避免无效编译）
   push:
     branches: [ master ]
 
 jobs:
   build-reshade:
-    runs-on: windows-2022
+    runs-on: windows-2022 # VS2022环境，完美兼容老版本VC项目
     defaults:
       run:
         shell: powershell
-        working-directory: ${{ github.workspace }} # 强制锁定仓库根目录为工作目录，解决找不到CMakeLists.txt的问题
+        working-directory: ${{ github.workspace }}
     steps:
-      # 步骤1：拉取完整源码+递归拉取子模块（必须，否则依赖库缺失）
+      # 步骤1：检出完整源码 + 递归拉取所有子模块（必须！deps依赖全在子模块里）
       - name: Checkout Full Source Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 步骤2：配置MSVC编译环境（适配VS2022+兼容老版本工具集）
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
+      # 步骤2：安装Python（必须！用于生成gl3w依赖的代码，否则编译会缺头文件）
+      - name: Setup Python 3.x
+        uses: actions/setup-python@v5
         with:
-          vsversion: 2022
-          toolset: 14.29 # 兼容Thalixte 4.9.1的VS2019工具集
-          arch: x86,x64
+          python-version: '3.10'
+          architecture: 'x64'
 
-      # 步骤3：配置CMake环境
-      - name: Setup CMake
-        uses: lukka/get-cmake@v3.30.0
-
-      # 步骤4：编译32位版本（起源引擎/L4D2核心）
-      - name: Configure & Build 32-bit Release
+      # 步骤3：生成gl3w依赖代码（ReShade 4.x必须前置步骤）
+      - name: Generate gl3w Dependencies
         run: |
-          # 单独创建32位构建目录，避免和64位冲突
-          New-Item -ItemType Directory -Force -Path build32
-          Set-Location build32
-          
-          # 32位CMake配置（反引号后绝对不能有空格！！）
-          cmake .. `
-            -G "Visual Studio 17 2022" `
-            -A Win32 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DRESHADE_BUILD_SETUP=OFF `
-            -DRESHADE_BUILD_D3D9=ON `
-            -DRESHADE_BUILD_D3D10=ON `
-            -DRESHADE_BUILD_D3D11=ON `
-            -DRESHADE_BUILD_D3D12=ON `
-            -DRESHADE_BUILD_OPENGL=ON `
-            -DRESHADE_BUILD_VULKAN=ON
-          
-          # 执行32位编译
-          cmake --build . --config Release --target ALL_BUILD -j 8
+          Set-Location deps/gl3w
+          python gl3w_gen.py
+          Write-Host "gl3w绑定代码生成完成"
 
-      # 步骤5：编译64位版本
-      - name: Configure & Build 64-bit Release
+      # 步骤4：配置MSVC编译环境 + MSBuild工具
+      - name: Setup MSVC & MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[17.0,18.0)' # 锁定VS2022，兼容老版本项目
+          msbuild-architecture: x64
+
+      # 步骤5：编译32位Release版本（Win32，L4D2/起源引擎32位游戏专用）
+      - name: Build 32-bit (Win32) Release
         run: |
-          # 单独创建64位构建目录
-          New-Item -ItemType Directory -Force -Path build64
-          Set-Location build64
-          
-          # 64位CMake配置
-          cmake .. `
-            -G "Visual Studio 17 2022" `
-            -A x64 `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DRESHADE_BUILD_SETUP=OFF `
-            -DRESHADE_BUILD_D3D9=ON `
-            -DRESHADE_BUILD_D3D10=ON `
-            -DRESHADE_BUILD_D3D11=ON `
-            -DRESHADE_BUILD_D3D12=ON `
-            -DRESHADE_BUILD_OPENGL=ON `
-            -DRESHADE_BUILD_VULKAN=ON
-          
-          # 执行64位编译
-          cmake --build . --config Release --target ALL_BUILD -j 8
+          msbuild ReShade.sln `
+            /t:Build `
+            /p:Configuration=Release `
+            /p:Platform=Win32 `
+            /p:PreferredToolArchitecture=x64 `
+            /m:8 # 多线程编译加速
+          Write-Host "32位Release版本编译完成"
 
-      # 步骤6：整理编译产物，分类打包
+      # 步骤6：编译64位Release版本（x64，64位游戏专用）
+      - name: Build 64-bit (x64) Release
+        run: |
+          msbuild ReShade.sln `
+            /t:Build `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:PreferredToolArchitecture=x64 `
+            /m:8
+          Write-Host "64位Release版本编译完成"
+
+      # 步骤7：整理编译产物，分类打包
       - name: Organize Build Artifacts
         run: |
           # 创建输出目录
           $outputRoot = "Thalixte_ReShade_4.9.1_Full_DLLs"
           New-Item -ItemType Directory -Force -Path "$outputRoot/32bit"
           New-Item -ItemType Directory -Force -Path "$outputRoot/64bit"
-          
-          # 复制32位所有DLL
-          Copy-Item -Path "build32/Release/*.dll" -Destination "$outputRoot/32bit/" -Force
-          # 复制64位所有DLL
-          Copy-Item -Path "build64/Release/*.dll" -Destination "$outputRoot/64bit/" -Force
-          
+
+          # 复制32位DLL（编译产物默认输出到bin/Win32/Release）
+          Copy-Item -Path "bin/Win32/Release/*.dll" -Destination "$outputRoot/32bit/" -Force
+          # 复制64位DLL（编译产物默认输出到bin/x64/Release）
+          Copy-Item -Path "bin/x64/Release/*.dll" -Destination "$outputRoot/64bit/" -Force
+
           # 输出文件清单，验证编译结果
-          Write-Host "===== 32位编译产物 ====="
+          Write-Host "===== 32位编译产物清单 ====="
           Get-ChildItem "$outputRoot/32bit"
-          Write-Host "===== 64位编译产物 ====="
+          Write-Host "===== 64位编译产物清单 ====="
           Get-ChildItem "$outputRoot/64bit"
 
-      # 步骤7：上传可下载的压缩包
+      # 步骤8：上传可下载的编译产物包
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Thalixte_ReShade_4.9.1_Full_DLLs
           path: Thalixte_ReShade_4.9.1_Full_DLLs/
-          retention-days: 90  
+          retention-days: 90 # 产物保留90天  
