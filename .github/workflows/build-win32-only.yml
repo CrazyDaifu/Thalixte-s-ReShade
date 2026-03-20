@@ -1,17 +1,79 @@
+name: Build Thalixte ReShade 32-bit Only
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
 jobs:
   build:
-    runs-on: windows-latest  # 改回来
+    runs-on: windows-latest
     
     steps:
-    # ... 其他步骤不变 ...
-    
+    - name: Checkout with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
     - name: Build ReShade 32-bit
       shell: cmd
       run: |
         msbuild ReShade.sln ^
           /p:Configuration=Release ^
           /p:Platform="32-bit" ^
-          /p:WindowsTargetPlatformVersion=10.0.22000.0 ^  :: 强制使用 Win11 SDK
-          /p:PlatformToolset=v143 ^  :: 使用 VS2022 工具集
+          /p:WindowsTargetPlatformVersion=10.0.22000.0 ^
+          /p:PlatformToolset=v143 ^
           /t:"ReShade";"ReShade FX";"gl3w";"ImGui";"MinHook";"stb";"FXC";"Injector" ^
-          /m
+          /m ^
+          /verbosity:minimal
+
+    - name: Collect 32-bit DLLs
+      shell: powershell
+      run: |
+        New-Item -ItemType Directory -Force -Path "output_32bit"
+        
+        $paths = @(
+          "bin\32-bit\Release\ReShade32.dll",
+          "bin\Win32\Release\ReShade32.dll",
+          "bin\Release\Win32\ReShade32.dll"
+        )
+        
+        foreach ($p in $paths) {
+          if (Test-Path $p) {
+            Copy-Item $p "output_32bit\"
+            Write-Host "Found: $p"
+          }
+        }
+        
+        if (-not (Test-Path "output_32bit\ReShade32.dll")) {
+          Get-ChildItem -Path "bin" -Recurse | Select-Object FullName
+          exit 1
+        }
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Thalixte-ReShade-32bit
+        path: output_32bit/
+        retention-days: 30
+
+    - name: Release
+      if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: win32-build-${{ github.run_number }}
+        name: Thalixte ReShade 32-bit Build ${{ github.run_number }}
+        files: output_32bit/*
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
