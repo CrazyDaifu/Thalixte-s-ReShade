@@ -12,52 +12,52 @@ jobs:
     steps:
     - name: Checkout without submodules
       uses: actions/checkout@v4
-      # 关键：不递归子模块，避免 gl3w 子模块覆盖我们的文件
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Create gl3w files structure
-      shell: powershell
+    - name: Create gl3w directories
+      shell: cmd
       run: |
-        # 创建目录（如果 GitHub 网页上传的文件没上来，就在这里创建空的）
-        New-Item -ItemType Directory -Force -Path "deps/gl3w/src"
-        New-Item -ItemType Directory -Force -Path "deps/gl3w/include/GL"
-        
-        # 创建空的 gl3w.c（只要能编译过就行，OpenGL 功能我们不用）
-        @"
-// Dummy gl3w.c for CI build
-#include <GL/gl3w.h>
-int gl3wInit(void) { return 0; }
-void gl3wShutdown(void) {}
-"@ | Set-Content "deps/gl3w/src/gl3w.c" -Encoding UTF8
+        mkdir deps\gl3w\src
+        mkdir deps\gl3w\include\GL
 
-        # 创建空的头文件
-        @"
-// Dummy gl3w.h
-#ifndef GL3W_H
-#define GL3W_H
-#include <GL/glcorearb.h>
-int gl3wInit(void);
-void gl3wShutdown(void);
-#endif
-"@ | Set-Content "deps/gl3w/include/GL/gl3w.h" -Encoding UTF8
+    - name: Create dummy gl3w.c
+      shell: cmd
+      run: |
+        echo // Dummy gl3w.c > deps\gl3w\src\gl3w.c
+        echo #include ^<GL/gl3w.h^> >> deps\gl3w\src\gl3w.c
+        echo int gl3wInit(void) { return 0; } >> deps\gl3w\src\gl3w.c
+        echo void gl3wShutdown(void) {} >> deps\gl3w\src\gl3w.c
 
-        # 创建 glcorearb.h（最小实现）
-        @"
-// Dummy glcorearb.h
-#ifndef GLCOREARB_H
-#define GLCOREARB_H
-#include <windows.h>
-typedef unsigned int GLenum;
-typedef unsigned int GLuint;
-#endif
-"@ | Set-Content "deps/gl3w/include/GL/glcorearb.h" -Encoding UTF8
+    - name: Create dummy gl3w.h
+      shell: cmd
+      run: |
+        echo // Dummy gl3w.h > deps\gl3w\include\GL\gl3w.h
+        echo #ifndef GL3W_H >> deps\gl3w\include\GL\gl3w.h
+        echo #define GL3W_H >> deps\gl3w\include\GL\gl3w.h
+        echo #include ^<GL/glcorearb.h^> >> deps\gl3w\include\GL\gl3w.h
+        echo int gl3wInit(void); >> deps\gl3w\include\GL\gl3w.h
+        echo void gl3wShutdown(void); >> deps\gl3w\include\GL\gl3w.h
+        echo #endif >> deps\gl3w\include\GL\gl3w.h
 
-        # 创建空的 gl3w_gen.py
-        "import sys`nprint('skipped')`nsys.exit(0)" | Set-Content "deps/gl3w/gl3w_gen.py"
+    - name: Create dummy glcorearb.h
+      shell: cmd
+      run: |
+        echo // Dummy glcorearb.h > deps\gl3w\include\GL\glcorearb.h
+        echo #ifndef GLCOREARB_H >> deps\gl3w\include\GL\glcorearb.h
+        echo #define GLCOREARB_H >> deps\gl3w\include\GL\glcorearb.h
+        echo #include ^<windows.h^> >> deps\gl3w\include\GL\glcorearb.h
+        echo typedef unsigned int GLenum; >> deps\gl3w\include\GL\glcorearb.h
+        echo typedef unsigned int GLuint; >> deps\gl3w\include\GL\glcorearb.h
+        echo #endif >> deps\gl3w\include\GL\glcorearb.h
 
-        Write-Host "Created dummy gl3w files"
+    - name: Create dummy gl3w_gen.py
+      shell: cmd
+      run: |
+        echo import sys > deps\gl3w\gl3w_gen.py
+        echo print("skipped") >> deps\gl3w\gl3w_gen.py
+        echo sys.exit(0) >> deps\gl3w\gl3w_gen.py
 
     - name: Remove Windows SDK version restriction
       shell: powershell
@@ -86,20 +86,13 @@ typedef unsigned int GLuint;
       shell: powershell
       run: |
         New-Item -ItemType Directory -Force -Path "output_32bit"
-        
-        $paths = @(
-          "bin\32-bit\Release\ReShade32.dll",
-          "bin\Win32\Release\ReShade32.dll",
-          "bin\Release\Win32\ReShade32.dll"
-        )
-        
+        $paths = @("bin\32-bit\Release\ReShade32.dll","bin\Win32\Release\ReShade32.dll","bin\Release\Win32\ReShade32.dll")
         foreach ($p in $paths) {
           if (Test-Path $p) {
             Copy-Item $p "output_32bit\"
             Write-Host "Found: $p"
           }
         }
-        
         if (-not (Test-Path "output_32bit\ReShade32.dll")) {
           Get-ChildItem -Path "bin" -Recurse | Select-Object FullName
           exit 1
