@@ -18,14 +18,15 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
 
-    - name: Fix Windows SDK version to auto-select
+    - name: Remove Windows SDK version restriction
       shell: powershell
       run: |
+        # 直接删除 WindowsTargetPlatformVersion 节点，使用系统默认最新版
         Get-ChildItem -Recurse -Filter "*.vcxproj" | ForEach-Object {
           $content = Get-Content $_.FullName -Raw
           $original = $content
-          # 替换为 "10.0" 表示使用最新可用版本
-          $content = $content -replace '<WindowsTargetPlatformVersion>10\.0\.\d+\.\d+</WindowsTargetPlatformVersion>', '<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>'
+          # 删除整个 WindowsTargetPlatformVersion 节点
+          $content = $content -replace '<WindowsTargetPlatformVersion>.*?</WindowsTargetPlatformVersion>\s*', ''
           if ($content -ne $original) {
             Set-Content $_.FullName $content -NoNewline
             Write-Host "Fixed: $($_.Name)"
