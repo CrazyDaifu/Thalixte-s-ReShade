@@ -9,7 +9,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2019  # 改成 2019，自带 10.0.17763.0 SDK
     
     steps:
     - name: Checkout with submodules
