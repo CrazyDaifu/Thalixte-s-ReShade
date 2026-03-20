@@ -1,0 +1,94 @@
+name: Build Thalixte Reshade
+
+on:
+  push:
+    branches: [ main, master, brute_force_fix_viewport ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        platform: [Win32, x64]
+        include:
+          - platform: Win32
+            arch: x86
+          - platform: x64
+            arch: x64
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch }}
+    
+    - name: Install dependencies
+      shell: pwsh
+      run: |
+        pip install Jinja2
+    
+    - name: Build ReShade
+      shell: pwsh
+      run: |
+        # 清理旧构建
+        if (Test-Path "bin") { Remove-Item -Recurse -Force "bin" }
+        
+        # 使用ReShade的build脚本
+        python tools\build.py --platform ${{ matrix.platform }} --configuration Release
+        
+        # 检查输出
+        $outputPath = "bin\${{ matrix.platform }}\Release\ReShade.dll"
+        if (Test-Path $outputPath) {
+          Write-Host "Build successful: $outputPath" -ForegroundColor Green
+        } else {
+          Write-Error "Build failed!"
+          exit 1
+        }
+    
+    - name: Prepare artifacts
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path "artifacts"
+        $src = "bin\${{ matrix.platform }}\Release\ReShade.dll"
+        $dst = "artifacts\ReShade_${{ matrix.platform }}.dll"
+        Copy-Item $src $dst
+        Write-Host "Copied to: $dst" -ForegroundColor Green
+    
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ReShade-${{ matrix.platform }}
+        path: artifacts/ReShade_${{ matrix.platform }}.dll
+
+  package:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    name: Package Release
+    steps:
+    - name: Download Artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts/
+    
+    - name: Create Package
+      run: |
+        mkdir -p release
+        cp artifacts/*/ReShade_*.dll release/
+        cd release && zip -9 ../ReShade-Thalixte.zip *.dll
+    
+    - name: Upload Package
+      uses: actions/upload-artifact@v4
+      with:
+        name: ReShade-Thalixte-Full
+        path: ReShade-Thalixte.zip  
