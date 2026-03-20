@@ -29,47 +29,36 @@ jobs:
         echo import sys > deps\gl3w\gl3w_gen.py
         echo sys.exit(0) >> deps\gl3w\gl3w_gen.py
 
-    - name: Fix vcxproj files (Remove SDK restriction and D3D12)
+    - name: Fix vcxproj files (Remove SDK and D3D12)
       shell: powershell
       run: |
         Get-ChildItem -Recurse -Filter "*.vcxproj" | ForEach-Object {
-          [xml]$xml = Get-Content $_.FullName
+          $content = Get-Content $_.FullName -Raw
           $modified = $false
           
-          # 1. 删除 WindowsTargetPlatformVersion 节点
-          $sdkNodes = $xml.SelectNodes("//WindowsTargetPlatformVersion")
-          foreach ($node in $sdkNodes) {
-            $node.ParentNode.RemoveChild($node)
+          # 1. 删除 WindowsTargetPlatformVersion 行（包括 Global 和 Configuration）
+          if ($content -match '<WindowsTargetPlatformVersion>[^<]+</WindowsTargetPlatformVersion>') {
+            $content = $content -replace '<WindowsTargetPlatformVersion>[^<]+</WindowsTargetPlatformVersion>\s*', ''
             $modified = $true
           }
           
-          # 2. 删除所有 D3D12 相关的 ClCompile 和 ClInclude
-          $items = $xml.SelectNodes("//ClCompile[contains(@Include, 'd3d12')] | //ClInclude[contains(@Include, 'd3d12')]")
-          foreach ($item in $items) {
-            $item.ParentNode.RemoveChild($item)
+          # 2. 删除 D3D12 文件引用（包括 d3d12 和 dxgi 中可能包含 D3D12 的部分）
+          # 先移除 d3d12 目录下的所有文件
+          if ($content -match 'Include="source\\d3d12\\[^"]*"') {
+            $content = $content -replace '<ClCompile Include="source\\d3d12\\[^"]*"\s*/?>\s*', ''
+            $content = $content -replace '<ClInclude Include="source\\d3d12\\[^"]*"\s*/?>\s*', ''
             $modified = $true
-            Write-Host "Removed D3D12 item: $($item.Include) from $($_.Name)"
           }
           
-          # 3. 添加 D3D12 禁用宏定义
-          $groups = $xml.SelectNodes("//ItemDefinitionGroup[not(@Condition) or contains(@Condition, 'Release') or contains(@Condition, '32-bit')]")
-          foreach ($group in $groups) {
-            if ($group.ClCompile -eq $null) {
-              $clCompile = $xml.CreateElement("ClCompile")
-              $group.AppendChild($clCompile)
-            }
-            $preprocessor = $group.ClCompile.PreprocessorDefinitions
-            if ($preprocessor -eq $null) {
-              $preprocessor = $xml.CreateElement("PreprocessorDefinitions")
-              $group.ClCompile.AppendChild($preprocessor)
-            }
-            $preprocessor.InnerText = "RESHADE_NO_D3D12;RESHADE_NO_D3D12ON7;%(PreprocessorDefinitions)"
+          # 3. 添加 NO_D3D12 宏到所有 PreprocessorDefinitions
+          if ($content -match '<PreprocessorDefinitions>') {
+            $content = $content -replace '(<PreprocessorDefinitions>)([^<]*)(</PreprocessorDefinitions>)', '$1RESHADE_NO_D3D12;RESHADE_NO_D3D12ON7;$2$3'
             $modified = $true
           }
           
           if ($modified) {
-            $xml.Save($_.FullName)
-            Write-Host "Updated: $($_.Name)"
+            Set-Content $_.FullName $content -NoNewline
+            Write-Host "Fixed: $($_.Name)"
           }
         }
 
