@@ -1,60 +1,69 @@
-# GitHub Actions 编译Thalixte ReShade 4.9.1全DLL
 name: Build Thalixte ReShade 4.9.1 Full DLLs
-
-# 触发条件：手动触发（workflow_dispatch）+ 推送代码触发（可选）
 on:
-  workflow_dispatch:  # 手动触发（推荐，避免自动编译）
+  workflow_dispatch: # 推荐手动触发，避免无效编译
   push:
-    branches: [master]  # 推送master分支时自动编译（可选）
+    branches: [ master ]
 
-# 作业配置：Windows环境编译（ReShade仅支持Windows编译）
 jobs:
-  build-windows:
-    runs-on: windows-2022  # 使用VS2022环境（兼容4.9.1编译）
+  build-reshade:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
+        working-directory: ${{ github.workspace }} # 强制锁定仓库根目录为工作目录，解决找不到CMakeLists.txt的问题
     steps:
-      # 步骤1：检出Thalixte ReShade源码
-      - name: Checkout Source Code
+      # 步骤1：拉取完整源码+递归拉取子模块（必须，否则依赖库缺失）
+      - name: Checkout Full Source Code
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # 拉取子模块（ReShade依赖的第三方库）
+          submodules: recursive
           fetch-depth: 0
 
-      # 步骤2：配置CMake环境
-      - name: Setup CMake
-        uses: lukka/get-cmake@v3.28.0
-        with:
-          cmakeVersion: 3.20.0  # 4.9.1适配的CMake版本
-
-      # 步骤3：配置Visual Studio构建工具
-      - name: Setup MSVC
+      # 步骤2：配置MSVC编译环境（适配VS2022+兼容老版本工具集）
+      - name: Setup MSVC Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          toolset: 14.29  # VS2019工具集（4.9.1最佳兼容版本）
-          arch: x86,x64   # 同时编译32位和64位
+          vsversion: 2022
+          toolset: 14.29 # 兼容Thalixte 4.9.1的VS2019工具集
+          arch: x86,x64
 
-      # 步骤4：创建构建目录并生成项目文件
-      - name: Configure CMake
+      # 步骤3：配置CMake环境
+      - name: Setup CMake
+        uses: lukka/get-cmake@v3.30.0
+
+      # 步骤4：编译32位版本（起源引擎/L4D2核心）
+      - name: Configure & Build 32-bit Release
         run: |
-          # 创建build目录
-          mkdir -p build
-          cd build
-          # 生成CMake项目（编译所有API的ReShade DLL）
+          # 单独创建32位构建目录，避免和64位冲突
+          New-Item -ItemType Directory -Force -Path build32
+          Set-Location build32
+          
+          # 32位CMake配置（反引号后绝对不能有空格！！）
           cmake .. `
-            -G "Visual Studio 16 2019" `  # 指定VS2019生成器
-            -A Win32 `                     # 先编译32位
-            -DCMAKE_BUILD_TYPE=Release `   # 发布版本
-            -DRESHADE_BUILD_SETUP=OFF `    # 不编译安装程序
-            -DRESHADE_BUILD_D3D9=ON `      # 编译DX9（L4D2/起源引擎核心）
-            -DRESHADE_BUILD_D3D10=ON `     # 编译DX10
-            -DRESHADE_BUILD_D3D11=ON `     # 编译DX11
-            -DRESHADE_BUILD_D3D12=ON `     # 编译DX12
-            -DRESHADE_BUILD_OPENGL=ON `    # 编译OpenGL
-            -DRESHADE_BUILD_VULKAN=ON `    # 编译Vulkan
-            -DRESHADE_BUILD_DIRECTINPUT=ON # 编译输入模块（可选）
+            -G "Visual Studio 17 2022" `
+            -A Win32 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DRESHADE_BUILD_SETUP=OFF `
+            -DRESHADE_BUILD_D3D9=ON `
+            -DRESHADE_BUILD_D3D10=ON `
+            -DRESHADE_BUILD_D3D11=ON `
+            -DRESHADE_BUILD_D3D12=ON `
+            -DRESHADE_BUILD_OPENGL=ON `
+            -DRESHADE_BUILD_VULKAN=ON
+          
+          # 执行32位编译
+          cmake --build . --config Release --target ALL_BUILD -j 8
 
-          # 生成64位项目文件
+      # 步骤5：编译64位版本
+      - name: Configure & Build 64-bit Release
+        run: |
+          # 单独创建64位构建目录
+          New-Item -ItemType Directory -Force -Path build64
+          Set-Location build64
+          
+          # 64位CMake配置
           cmake .. `
-            -G "Visual Studio 16 2019" `
+            -G "Visual Studio 17 2022" `
             -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
             -DRESHADE_BUILD_SETUP=OFF `
@@ -63,42 +72,34 @@ jobs:
             -DRESHADE_BUILD_D3D11=ON `
             -DRESHADE_BUILD_D3D12=ON `
             -DRESHADE_BUILD_OPENGL=ON `
-            -DRESHADE_BUILD_VULKAN=ON `
-            -DRESHADE_BUILD_DIRECTINPUT=ON `
-            --build . --config Release --target ALL_BUILD
+            -DRESHADE_BUILD_VULKAN=ON
+          
+          # 执行64位编译
+          cmake --build . --config Release --target ALL_BUILD -j 8
 
-      # 步骤5：编译32位Release版本
-      - name: Build 32-bit Release
-        run: |
-          cd build
-          cmake --build . --config Release --target ALL_BUILD -j 4  # -j 4 多线程编译
-
-      # 步骤6：编译64位Release版本
-      - name: Build 64-bit Release
-        run: |
-          cd build
-          cmake --build . --config Release --target ALL_BUILD -A x64 -j 4
-
-      # 步骤7：整理编译产物（分类32/64位DLL）
-      - name: Organize Build Output
+      # 步骤6：整理编译产物，分类打包
+      - name: Organize Build Artifacts
         run: |
           # 创建输出目录
-          mkdir -p ReShade_Thalixte_4.9.1/32bit
-          mkdir -p ReShade_Thalixte_4.9.1/64bit
+          $outputRoot = "Thalixte_ReShade_4.9.1_Full_DLLs"
+          New-Item -ItemType Directory -Force -Path "$outputRoot/32bit"
+          New-Item -ItemType Directory -Force -Path "$outputRoot/64bit"
+          
+          # 复制32位所有DLL
+          Copy-Item -Path "build32/Release/*.dll" -Destination "$outputRoot/32bit/" -Force
+          # 复制64位所有DLL
+          Copy-Item -Path "build64/Release/*.dll" -Destination "$outputRoot/64bit/" -Force
+          
+          # 输出文件清单，验证编译结果
+          Write-Host "===== 32位编译产物 ====="
+          Get-ChildItem "$outputRoot/32bit"
+          Write-Host "===== 64位编译产物 ====="
+          Get-ChildItem "$outputRoot/64bit"
 
-          # 复制32位DLL
-          copy build/Release/*.dll ReShade_Thalixte_4.9.1/32bit/
-          # 复制64位DLL
-          copy build/x64/Release/*.dll ReShade_Thalixte_4.9.1/64bit/
-
-          # 列出所有文件（验证）
-          dir ReShade_Thalixte_4.9.1/32bit
-          dir ReShade_Thalixte_4.9.1/64bit
-
-      # 步骤8：上传编译产物为Artifact（可下载）
+      # 步骤7：上传可下载的压缩包
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Thalixte_ReShade_4.9.1_Full_DLLs
-          path: ReShade_Thalixte_4.9.1/
-          retention-days: 90  # 产物保留90天  
+          path: Thalixte_ReShade_4.9.1_Full_DLLs/
+          retention-days: 90  
